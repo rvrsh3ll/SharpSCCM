@@ -2,13 +2,12 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Management;
-//using System.Text.Json;
 
 namespace SharpSCCM
 {
     public class MgmtUtil
     {
-        public static string BuildClassInstanceQueryString(ManagementScope scope, string wmiClass, bool count = false, string[] properties = null, string whereCondition = null, string orderByColumn = null, bool verbose = false)
+        public static string BuildClassInstanceQueryString(ManagementScope wmiConnection, string wmiClass, bool count = false, string[] properties = null, string whereCondition = null, string orderByColumn = null, bool verbose = false)
         {
             string propString;
             if (verbose || count || properties == null)
@@ -17,7 +16,7 @@ namespace SharpSCCM
             }
             else
             {
-                string[] keyPropertyNames = GetKeyPropertyNames(scope, wmiClass);
+                string[] keyPropertyNames = GetKeyPropertyNames(wmiConnection, wmiClass);
                 if (keyPropertyNames.Length > 0)
                 {
                     properties = keyPropertyNames.Union(properties).ToArray();
@@ -53,53 +52,48 @@ namespace SharpSCCM
             return query;
         }
 
-        public static ManagementObjectCollection GetClassInstanceCollection(ManagementScope scope, string wmiClass, string query)
+        public static ManagementObjectCollection GetClassInstances(ManagementScope wmiConnection, string wmiClass, string query = null, bool count = false, string[] properties = null, string whereCondition = null, string orderByColumn = null, bool dryRun = false, bool verbose = false, bool getLazyProps = true, bool printOutput = false)
         {
             ManagementObjectCollection classInstances = null;
-            Console.WriteLine($"[+] Executing WQL query: {query}");
-            ObjectQuery objQuery = new ObjectQuery(query);
-            ManagementObjectSearcher searcher = new ManagementObjectSearcher(scope, objQuery);
-            try
-            {
-                classInstances = searcher.Get();
-                if (classInstances.Count > 0)
-                {
-                    return classInstances;
-                }
-                else
-                {
-                    Console.WriteLine($"[+] No instances of {wmiClass} meeting the specified criteria were found, or you do not have permission to query them");
-                }
-            }
-            catch (ManagementException ex)
-            {
-                Console.WriteLine($"[!] An exception occurred while querying for WMI data: {ex.Message}");
-            }
-            return null;
-        }
-
-        public static void GetClassInstances(ManagementScope wmiConnection, string wmiClass, bool count = false, string[] properties = null, string whereCondition = null, string orderByColumn = null, bool dryRun = false, bool verbose = false, bool getLazyProps = true)
-        {
             if (wmiConnection.IsConnected)
             {
-                string query = BuildClassInstanceQueryString(wmiConnection, wmiClass, count, properties, whereCondition, orderByColumn, verbose);
+                // Build query string if not provided
+                query = string.IsNullOrEmpty(query) ? BuildClassInstanceQueryString(wmiConnection, wmiClass, count, properties, whereCondition, orderByColumn, verbose) : query;
                 if (dryRun)
                 {
                     Console.WriteLine($"[+] WQL query: {query}");
                 }
                 else
                 {
-                    ManagementObjectCollection classInstanceCollection = GetClassInstanceCollection(wmiConnection, wmiClass, query);
-                    PrintClassInstances(wmiConnection, wmiClass, query, classInstanceCollection, count, properties, verbose, getLazyProps);
+                    if (printOutput) Console.WriteLine($"[+] Executing WQL query: {query}");
+                    ObjectQuery objQuery = new ObjectQuery(query);
+                    ManagementObjectSearcher searcher = new ManagementObjectSearcher(wmiConnection, objQuery);
+                    try
+                    {
+                        classInstances = searcher.Get();
+                        if (printOutput)
+                        {
+                            if (classInstances.Count > 0)
+                            {
+                                PrintClassInstances(wmiClass, classInstances, count, properties, verbose, getLazyProps);
+                            }
+                            else
+                            {
+                                Console.WriteLine($"[+] No instances of {wmiClass} meeting the specified criteria were found, or you do not have permission to query them");
+                            }
+                        }
+                    }
+                    catch (ManagementException ex)
+                    {
+                        Console.WriteLine($"[!] An exception occurred while querying for WMI data: {ex.Message}");
+                        if (ex.Message == "Unexpected error ")
+                        {
+                            Console.WriteLine("[!] Does your account have the correct permissions?");
+                        }
+                    }
                 }
             }
-        }
-
-        public static ManagementObjectCollection GetClassWmiObjects(ManagementScope wmiConnection, string className, string properties = "*")
-        {
-            ManagementObjectSearcher searcher = new ManagementObjectSearcher(wmiConnection, new ObjectQuery($"SELECT {properties} FROM {className}"));
-            ManagementObjectCollection wmiObjects = searcher.Get();
-            return wmiObjects;
+            return classInstances;
         }
 
         public static string[] GetKeyPropertyNames(ManagementScope wmiConnection, string className)
@@ -126,34 +120,6 @@ namespace SharpSCCM
             }
         }
 
-        public static void InvokeQuery(ManagementScope scope, string query)
-        {
-            try
-            {
-                ObjectQuery objQuery = new ObjectQuery(query);
-                ManagementObjectSearcher searcher = new ManagementObjectSearcher(scope, objQuery);
-                Console.WriteLine("-----------------------------------");
-                Console.WriteLine(objQuery);
-                Console.WriteLine("-----------------------------------");
-                foreach (ManagementObject queryObj in searcher.Get())
-                {
-                    foreach (PropertyData prop in queryObj.Properties)
-                    {
-                        Console.WriteLine("{0}: {1}", prop.Name, prop.Value);
-                    }
-                    Console.WriteLine("-----------------------------------");
-                }
-            }
-            catch (ManagementException ex)
-            {
-                Console.WriteLine("An exception occurred while querying for WMI data: " + ex.Message);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"An unhandled exception of type {ex.GetType()} occurred: {ex.Message}");
-            }
-        }
-
         public static ManagementScope NewWmiConnection(string server = null, string wmiNamespace = null, string siteCode = null)
         {
             string path = "";
@@ -177,7 +143,7 @@ namespace SharpSCCM
                     // siteCode should now be populated
                     if (!string.IsNullOrEmpty(siteCode))
                     {
-                        Console.WriteLine($"[+] Using provided management point: {server}");
+                        Console.WriteLine($"[+] Using WMI provider: {server}");
                     }
                 }
                 // server and sitecode should now be populated unless there are errors querying the local WMI repository
@@ -245,7 +211,7 @@ namespace SharpSCCM
                 {
                     Console.WriteLine(
                         "[!] The SCCM client may not be installed on this machine\n" +
-                        "[!] Try specifying a management point (-mp) and site code (-sc)"
+                        "[!] Try specifying an SMS Provider (-sms) and site code (-sc)"
                         );
                 }
             }
@@ -256,12 +222,12 @@ namespace SharpSCCM
             return wmiConnection;
         }
 
-        public static void PrintClasses(ManagementScope scope)
+        public static void PrintClasses(ManagementScope wmiConnection)
         {
             string query = "SELECT * FROM meta_class";
             Console.WriteLine($"[+] Executing WQL query: {query}");
             ObjectQuery objQuery = new ObjectQuery(query);
-            ManagementObjectSearcher searcher = new ManagementObjectSearcher(scope, objQuery);
+            ManagementObjectSearcher searcher = new ManagementObjectSearcher(wmiConnection, objQuery);
             var classes = new List<string>();
             foreach (ManagementClass wmiClass in searcher.Get())
             {
@@ -273,14 +239,17 @@ namespace SharpSCCM
             //Console.WriteLine(jsonString);
         }
 
-        public static void PrintClassInstances(ManagementScope scope, string wmiClass, string query, ManagementObjectCollection classInstanceCollection, bool count = false, string[] properties = null, bool verbose = false, bool getLazyProps = true)
+        public static void PrintClassInstances(string wmiClass, ManagementObjectCollection classInstances, bool count = false, string[] properties = null, bool verbose = false, bool getLazyProps = true)
         {
-            if (classInstanceCollection != null)
+            if (classInstances != null)
             {
+                if (!string.IsNullOrEmpty(wmiClass))
+                {
+                    Console.WriteLine("-----------------------------------");
+                    Console.WriteLine(wmiClass);
+                }
                 Console.WriteLine("-----------------------------------");
-                Console.WriteLine(wmiClass);
-                Console.WriteLine("-----------------------------------");
-                foreach (ManagementObject queryObj in classInstanceCollection)
+                foreach (ManagementObject queryObj in classInstances)
                 {
                     // Get lazy properties unless we're just counting instances or we explicitly don't want lazy props
                     if (!count && getLazyProps)
@@ -343,6 +312,9 @@ namespace SharpSCCM
 
         public static void PrintClassProperties(ManagementObject classInstance, bool showValue = false)
         {
+            Console.WriteLine("-----------------------------------");
+            Console.WriteLine(classInstance.ClassPath);
+            Console.WriteLine("-----------------------------------");
             foreach (PropertyData property in classInstance.Properties)
             {
                 if (!showValue)
@@ -354,6 +326,16 @@ namespace SharpSCCM
                     Console.WriteLine($"{property.Name} ({property.Type}): {property.Value}");
                 }
             }
+            Console.WriteLine("-----------------------------------");
+        }
+
+        public static void PrintObjectProperties(ManagementBaseObject managementBaseObject, bool showValue = false)
+        {
+            foreach (PropertyData property in managementBaseObject.Properties)
+            {
+                Console.WriteLine($"{property.Name}: {property.Value}");
+            }
+            Console.WriteLine("-----------------------------------");
         }
     }
 }
